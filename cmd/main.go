@@ -1,26 +1,74 @@
 package main
 
 import (
-	"fmt"
-	"github.com/NickCool98/Api_V0/internal/config"
-	"github.com/go-chi/chi/v5"
-	"net/http"
+	"github.com/NickCool98/Api_V0/handlers"
+	config2 "github.com/NickCool98/Api_V0/internal/config"
+	"github.com/NickCool98/Api_V0/internal/storage"
+	"github.com/NickCool98/Api_V0/service"
+	"go.uber.org/zap"
+	"log"
+	"os"
+	"os/signal"
+)
+
+var (
+	cfgPath = "config/local.yaml"
 )
 
 func main() {
-	cfg := config.MustLoad()
-	fmt.Println(cfg) // не забыть удалить
+	logger, err := zap.NewProduction()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer logger.Sync()
 
-	r := chi.NewRouter()
+	logger.Info("Starting application")
 
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hi, server is working!"))
-	})
+	cfg := config2.MustLoad(cfgPath)
 
-	if err := http.ListenAndServe(":8000", r); err != nil {
-		fmt.Printf("Start server error: %s", err.Error())
+	//connect to database
+	storageRep, err := storage.ConnectBD(cfg)
+	if err != nil {
+		log.Fatalf("Failed to connect database: %v", err)
 		return
 	}
-}
+	defer storageRep.DB.Close()
+	logger.Info(
+		"DB connected successfully",
+		zap.String("host", cfg.DB.Host),
+		zap.String("port", cfg.DB.Port),
+		zap.String("db", cfg.DB.Name),
+		zap.String("user", cfg.DB.User),
+	)
 
-// Здесь можно выполнять запросы к базе данных
+	cache := storage.NewCache()
+
+	//Get orders from database and pull in cache
+	orders, err := storageRep.GetOrders()
+	if err != nil {
+		logger.Error("Failed to refill cache from database", zap.Error(err))
+		return
+	}
+	for _, order := range orders {
+		cache.SaveOrder(order)
+		logger.Info("Cached", zap.String("order_uid", order.OrderUID))
+	}
+
+	start := handlers.New(cfgPath, cache)
+	go func() {
+		start.Launch()
+	}()
+	logger.Info(
+		"Server is starting",
+		zap.String("host", cfg.HTTPServer.Address),
+		zap.String("port", cfg.HTTPServer.Port),
+	)
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, os.Interrupt)
+	//connect consumer
+	err = service.Subscribe(cache, storageRep, *logger, sigchan)
+	if err != nil {
+		logger.Fatal("consumer error:", zap.Error(err))
+	}
+	logger.Info("Application shutdown")
+}

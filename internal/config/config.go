@@ -2,31 +2,29 @@ package config
 
 import (
 	"github.com/ilyakaznacheev/cleanenv"
-	"github.com/joho/godotenv"
 	"log"
-	"os"
 )
 
 type Config struct {
-	Env        string `yaml:"env" env-default:"local"`
-	HTTPServer `yaml:"http_server"`
+	DB         ConfigDB   `yaml:"db"`
+	HTTPServer ConfigHttp `yaml:"http_server"`
 }
 
-type HTTPServer struct {
-	Address string `yaml:"address" env-default:"localhost:8080"`
+type ConfigHttp struct {
+	Address string `yaml:"address"`
+	Port    string `yaml:"port"`
 }
 
-func MustLoad() *Config {
-	a := godotenv.Load()
-	_ = a
-	configPath := os.Getenv("CONFIG_PATH")
-	if configPath == "" {
-		log.Fatal("CONFIG PATH is not set")
-	}
+type ConfigDB struct {
+	Port     string `yaml:"port"`
+	Host     string `yaml:"host"`
+	Name     string `yaml:"name"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Schema   string `yaml:"schema"`
+}
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		log.Fatalf("config file does not exist: %s", err)
-	}
+func MustLoad(configPath string) *Config {
 
 	var cfg Config
 
